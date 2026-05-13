@@ -620,27 +620,9 @@ export class InlineChatController implements IEditorContribution {
 				arg.attachDiagnostics ??= true;
 			}
 
-			// ADD diagnostics (only when explicitly requested)
-			if (arg?.attachDiagnostics) {
-				const entries: IChatRequestVariableEntry[] = [];
-				for (const [range, marker] of this._markerDecorationsService.getLiveMarkers(uri)) {
-					if (range.intersectRanges(this._editor.getSelection())) {
-						const filter = IDiagnosticVariableEntryFilterData.fromMarker(marker);
-						entries.push(IDiagnosticVariableEntryFilterData.toEntry(filter));
-					}
-				}
-				if (entries.length > 0) {
-					this._zone.value.widget.chatWidget.attachmentModel.addContext(...entries);
-					const msg = entries.length > 1
-						? localize('fixN', "Fix the attached problems")
-						: localize('fix1', "Fix the attached problem");
-					this._zone.value.widget.chatWidget.input.setValue(msg, true);
-					arg.message = msg;
-					this._zone.value.widget.chatWidget.inputEditor.setSelection(new Selection(1, 1, Number.MAX_SAFE_INTEGER, 1));
-				}
-			}
-
-			// Check args
+			// Apply initial range/selection BEFORE collecting diagnostics so that
+			// attachDiagnostics filters against the caller-supplied selection/range rather
+			// than the editor's pre-invocation cursor position.
 			if (arg && InlineChatRunOptions.isInlineChatRunOptions(arg)) {
 				if (arg.initialRange) {
 					this._editor.revealRange(arg.initialRange);
@@ -648,6 +630,35 @@ export class InlineChatController implements IEditorContribution {
 				if (arg.initialSelection) {
 					this._editor.setSelection(arg.initialSelection);
 				}
+			}
+
+			// ADD diagnostics (only when explicitly requested)
+			if (arg?.attachDiagnostics) {
+				const entries: IChatRequestVariableEntry[] = [];
+				const diagnosticRange = arg.initialSelection ? Selection.liftSelection(arg.initialSelection) : arg.initialRange ?? this._editor.getSelection();
+				for (const [range, marker] of this._markerDecorationsService.getLiveMarkers(uri)) {
+					if (range.intersectRanges(diagnosticRange)) {
+						const filter = IDiagnosticVariableEntryFilterData.fromMarker(marker);
+						entries.push(IDiagnosticVariableEntryFilterData.toEntry(filter));
+					}
+				}
+				if (entries.length > 0) {
+					this._zone.value.widget.chatWidget.attachmentModel.addContext(...entries);
+					// Do not clobber a caller-supplied message; only set the default
+					// "Fix the attached problem(s)" message when the caller did not provide one.
+					if (!arg.message) {
+						const msg = entries.length > 1
+							? localize('fixN', "Fix the attached problems")
+							: localize('fix1', "Fix the attached problem");
+						this._zone.value.widget.chatWidget.input.setValue(msg, true);
+						arg.message = msg;
+						this._zone.value.widget.chatWidget.inputEditor.setSelection(new Selection(1, 1, Number.MAX_SAFE_INTEGER, 1));
+					}
+				}
+			}
+
+			// Check args
+			if (arg && InlineChatRunOptions.isInlineChatRunOptions(arg)) {
 				if (arg.attachments) {
 					await Promise.all(arg.attachments.map(async attachment => {
 						await this._zone.value.widget.chatWidget.attachmentModel.addFile(attachment);
