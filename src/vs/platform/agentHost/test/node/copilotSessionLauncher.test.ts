@@ -418,7 +418,7 @@ suite('CopilotSessionLauncher shared session config', () => {
 				createSkillDirectories: [],
 				createInstructionDirectories: [URI.joinPath(pluginDir, 'rules').fsPath],
 				createHasExitPlanHandler: true,
-				createLargeOutput: { maxSizeBytes: 8192 },
+				createLargeOutput: { maxSizeBytes: 20480 },
 				createManagedSettings: { permissions: managedSettingsPermissions },
 				resumeClientName: 'vscode-agent-host',
 				resumeGitHubMcpToolConfig: { disableFormDeferral: true },
@@ -426,7 +426,7 @@ suite('CopilotSessionLauncher shared session config', () => {
 				resumeSkillDirectories: [],
 				resumeInstructionDirectories: [URI.joinPath(pluginDir, 'rules').fsPath],
 				resumeHasExitPlanHandler: true,
-				resumeLargeOutput: { maxSizeBytes: 8192 },
+				resumeLargeOutput: { maxSizeBytes: 20480 },
 				resumeManagedSettings: { permissions: managedSettingsPermissions },
 			});
 		} finally {

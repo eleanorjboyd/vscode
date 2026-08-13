@@ -4,13 +4,95 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { DeferredPromise, timeout } from '../../../../base/common/async.js';
+import { DisposableStore } from '../../../../base/common/lifecycle.js';
+import { constObservable } from '../../../../base/common/observable.js';
+import { URI } from '../../../../base/common/uri.js';
 import { IChannelServer, IServerChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
+import { runWithFakedTimers } from '../../../../base/test/common/timeTravelScheduler.js';
+import { TestConfigurationService } from '../../../configuration/test/common/testConfigurationService.js';
+import { IEnvironmentService } from '../../../environment/common/environment.js';
 import { IInstantiationService } from '../../../instantiation/common/instantiation.js';
+import { TestInstantiationService } from '../../../instantiation/test/common/instantiationServiceMock.js';
 import { NullLogService } from '../../../log/common/log.js';
+import { agentsWindowAgentHostClientInfo } from '../../common/agentHostClientInfo.js';
+import { IAgentHostEnablementService } from '../../common/agentHostEnablementService.js';
 import { AGENT_HOST_CLIENT_PROXY_CHANNEL } from '../../common/agentHostClientProxyChannel.js';
 import { AGENT_HOST_CLIENT_BYOK_LM_CHANNEL, AgentHostClientByokLmChannel } from '../../common/agentHostClientByokLmChannel.js';
-import { registerAgentHostClientChannels } from '../../electron-browser/localAgentHostService.js';
+import { IAgentCreateSessionConfig, IAgentHostManagementService } from '../../common/agentService.js';
+import { LocalAgentHostServiceClient, registerAgentHostClientChannels } from '../../electron-browser/localAgentHostService.js';
+
+suite('LocalAgentHostServiceClient', () => {
+
+	ensureNoDisposablesAreLeakedInTestSuite();
+
+	test('bounds extension-bearing createSession when management IPC does not settle', () => {
+		return runWithFakedTimers({ useFakeTimers: true, maxTaskCount: 10_000 }, async () => {
+			const disposables = new DisposableStore();
+			const hanging = new DeferredPromise<URI>();
+			const session = URI.parse('ahp-copilotcli://session/hanging');
+			let receivedConfig: IAgentCreateSessionConfig | undefined;
+			const managementService: IAgentHostManagementService = {
+				_serviceBrand: undefined,
+				createSessionWithExtensions: config => {
+					receivedConfig = config;
+					return hanging.p;
+				},
+				createChatWithExtensions: async () => assert.fail('Unexpected createChatWithExtensions call'),
+				shutdown: async () => assert.fail('Unexpected shutdown call'),
+				getNetworkDiagnosticsInfo: async () => assert.fail('Unexpected getNetworkDiagnosticsInfo call'),
+				getManagedSettingsDiagnostics: async () => assert.fail('Unexpected getManagedSettingsDiagnostics call'),
+				diagnosticsFetch: async () => assert.fail('Unexpected diagnosticsFetch call'),
+				startWebSocketServer: async () => assert.fail('Unexpected startWebSocketServer call'),
+				getInspectInfo: async () => assert.fail('Unexpected getInspectInfo call'),
+			};
+			const enablementService: IAgentHostEnablementService = {
+				_serviceBrand: undefined,
+				enabled: constObservable(false),
+			};
+			const instantiationService = disposables.add(new TestInstantiationService());
+			const client = disposables.add(new LocalAgentHostServiceClient(
+				agentsWindowAgentHostClientInfo,
+				new NullLogService(),
+				new TestConfigurationService(),
+				{ logsHome: URI.file('/logs') } as IEnvironmentService,
+				instantiationService,
+				enablementService,
+			));
+			let trackedSession: URI | undefined;
+			let trackedPromise: Promise<unknown> | undefined;
+			Object.defineProperty(client, '_protocolClient', {
+				value: {
+					trackSessionCreate: (resource: URI, promise: Promise<unknown>) => {
+						trackedSession = resource;
+						trackedPromise = promise;
+					},
+				},
+			});
+			Object.defineProperty(client, '_callManagement', {
+				value: <T>(callback: (management: IAgentHostManagementService) => Promise<T>) => callback(managementService),
+			});
+
+			try {
+				const creation = client.createSession({ provider: 'copilotcli', model: { id: 'gpt-4' }, session });
+				const rejection = creation.catch(error => error);
+
+				assert.strictEqual(receivedConfig?.session, session);
+				assert.strictEqual(trackedSession, session);
+				assert.strictEqual(trackedPromise, creation);
+
+				await timeout(31_000);
+				const error = await rejection;
+				assert.ok(error instanceof Error);
+				assert.match(error.message, /session creation for ahp-copilotcli:\/\/session\/hanging timed out after 30000ms/);
+			} finally {
+				hanging.complete(session);
+				disposables.dispose();
+			}
+		});
+	});
+});
 
 /**
  * Regression coverage for the renderer reverse-RPC channel registration. The

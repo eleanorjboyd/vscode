@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { DeferredPromise } from '../../../base/common/async.js';
+import { DeferredPromise, raceTimeout } from '../../../base/common/async.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { Disposable, DisposableStore, IReference, toDisposable } from '../../../base/common/lifecycle.js';
 import { autorun, constObservable, IObservable, ISettableObservable, observableValue } from '../../../base/common/observable.js';
@@ -61,6 +61,21 @@ import type { ActionEnvelope, ChatAction, ClientAnnotationsAction, ClientChanges
 import type { ComponentToState, RootState, StateComponents } from '../common/state/sessionState.js';
 
 const LOG_PREFIX = '[AgentHost:renderer]';
+const CREATE_SESSION_WITH_EXTENSIONS_TIMEOUT_MS = 30_000;
+
+/** Bounds local fallback creation when its management IPC response is lost. */
+async function createSessionWithExtensionsWithDeadline(
+	create: () => Promise<URI>,
+	session: URI,
+	timeoutMs = CREATE_SESSION_WITH_EXTENSIONS_TIMEOUT_MS,
+): Promise<URI> {
+	let timedOut = false;
+	const result = await raceTimeout(create(), timeoutMs, () => { timedOut = true; });
+	if (timedOut) {
+		throw new Error(`Local agent host session creation for ${session.toString()} timed out after ${timeoutMs}ms.`);
+	}
+	return result as URI;
+}
 
 class LocalAgentHostIpcChannelTransport extends AgentHostIpcChannelTransport {
 	constructor(channel: IChannel, connectionStore: DisposableStore, ahpLogger: AhpJsonlLogger | undefined) {
@@ -320,7 +335,10 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
 				throw new Error('Cannot create local agent host session without a provider.');
 			}
 			const session = config.session ?? AgentSession.uri(config.provider, generateUuid());
-			const promise = this._callManagement(management => management.createSessionWithExtensions({ ...config, session }));
+			const promise = createSessionWithExtensionsWithDeadline(
+				() => this._callManagement(management => management.createSessionWithExtensions({ ...config, session })),
+				session,
+			);
 			this._requireClient().trackSessionCreate(session, promise);
 			return promise;
 		}

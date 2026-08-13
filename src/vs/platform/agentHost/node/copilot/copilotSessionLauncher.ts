@@ -655,7 +655,7 @@ export class CopilotSessionLauncher implements ICopilotSessionLauncher {
 			systemMessage,
 			toolSearch: toolSearchActive ? { enabled: true, deferThreshold: toolSearchDeferThreshold } : { enabled: false },
 			largeOutput: {
-				maxSizeBytes: 8 * 1024,
+				maxSizeBytes: 20 * 1024,
 			},
 			managedSettings: {
 				permissions: managedSettingsPermissions,
